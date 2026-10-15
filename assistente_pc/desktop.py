@@ -23,7 +23,9 @@ class Desktop:
         self.mic = None
         self.controls = []
         root.title("Assistente PC · Local e sob seu controle")
-        root.geometry("1100x790")
+        width = min(1100, max(850, root.winfo_screenwidth() - 80))
+        height = min(790, max(650, root.winfo_screenheight() - 120))
+        root.geometry(f"{width}x{height}")
         root.minsize(850, 650)
         root.configure(bg="#101827")
         style = ttk.Style(root)
@@ -35,45 +37,56 @@ class Desktop:
         style.configure("TButton", font=("Segoe UI", 10), padding=(12, 9))
         style.configure("TCheckbutton", background="#101827", foreground="#e3edf7")
         style.configure("TCombobox", padding=6)
-        outer = ttk.Frame(root, padding=24)
+        outer = ttk.Frame(root, padding=16)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="Seu assistente. Seu controle.", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(outer, text="VOZ LOCAL  /  MEMÓRIA EXPLÍCITA  /  AÇÕES COM CONFIRMAÇÃO", style="Hint.TLabel").pack(anchor="w", pady=(5, 18))
+        # Only the transcript grows/shrinks. Reserve space for the composer first;
+        # pack previously let the transcript consume the bottom controls on Windows.
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(4, weight=1)
+        ttk.Label(outer, text="Seu assistente. Seu controle.", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(outer, text="VOZ LOCAL  /  MEMÓRIA EXPLÍCITA  /  AÇÕES COM CONFIRMAÇÃO", style="Hint.TLabel").grid(row=1, column=0, sticky="w", pady=(5, 12))
         toolbar = ttk.Frame(outer)
-        toolbar.pack(fill="x")
+        toolbar.grid(row=2, column=0, sticky="ew")
         self.model = tk.StringVar(value=args.model)
-        ttk.Label(toolbar, text="Modelo Ollama").pack(side="left")
-        ttk.Entry(toolbar, textvariable=self.model, width=22).pack(side="left", padx=8)
+        ttk.Label(toolbar, text="Modelo Ollama").grid(row=0, column=0, sticky="w")
+        ttk.Entry(toolbar, textvariable=self.model, width=22).grid(row=0, column=1, padx=8, sticky="w")
         self.mode = tk.StringVar(value="assistente")
-        ttk.Combobox(toolbar, textvariable=self.mode, values=("assistente", "conversa", "documentos"), state="readonly", width=14).pack(side="left", padx=5)
+        ttk.Combobox(toolbar, textvariable=self.mode, values=("assistente", "conversa", "documentos"), state="readonly", width=14).grid(row=0, column=2, padx=5, sticky="w")
         self.record_history = tk.BooleanVar(value=args.history)
-        ttk.Checkbutton(toolbar, text="Salvar histórico de ações", variable=self.record_history).pack(side="right")
+        ttk.Checkbutton(toolbar, text="Salvar histórico de ações", variable=self.record_history).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
         tools = ttk.Frame(outer)
-        tools.pack(fill="x", pady=12)
+        tools.grid(row=3, column=0, sticky="ew", pady=10)
         for label, callback in [("Memórias", self.memories), ("Rotinas", self.routines),
                                 ("Documentos", self.documents), ("Histórico", self.history),
                                 ("Nova conversa", self.reset), ("Privacidade", self.privacy)]:
             self.button(tools, label, callback).pack(side="left", padx=(0, 6))
         self.output = ScrolledText(outer, wrap="word", bg="#172337", fg="#e3edf7", insertbackground="white",
-                                   font=("Segoe UI", 11), relief="flat", padx=16, pady=16, state="disabled")
-        self.output.pack(fill="both", expand=True)
+                                   font=("Segoe UI", 11), width=1, height=4, relief="flat", padx=12, pady=10, state="disabled")
+        self.output.grid(row=4, column=0, sticky="nsew")
         self.write("ASSISTENTE", "Olá! Posso conversar, preparar ações e consultar documentos que você importar.\n"
                    "Ensine preferências em Memórias e salve planos em Rotinas. Nada é monitorado em segundo plano.\n"
                    "Exemplos: ‘abra a calculadora’ ou ‘executar rotina começar trabalho’.\n"
                    "Ações só acontecem após clicar em Executar plano e confirmar.")
         self.status = tk.StringVar(value="Pronto · microfone desligado")
-        ttk.Label(outer, textvariable=self.status, style="Hint.TLabel").pack(anchor="w", pady=(10, 6))
-        self.entry = tk.Text(outer, height=3, wrap="word", bg="#223149", fg="white", insertbackground="white",
+        status_label = ttk.Label(outer, textvariable=self.status, style="Hint.TLabel", wraplength=750)
+        status_label.grid(row=5, column=0, sticky="ew", pady=(8, 6))
+        outer.bind("<Configure>", lambda event: status_label.configure(wraplength=max(200, event.width - 40)))
+        self.entry = tk.Text(outer, width=1, height=3, wrap="word", bg="#223149", fg="white", insertbackground="white",
                              font=("Segoe UI", 11), relief="flat", padx=10, pady=8)
-        self.entry.pack(fill="x")
+        self.entry.grid(row=6, column=0, sticky="ew")
         self.entry.bind("<Control-Return>", lambda event: self.send())
         actions = ttk.Frame(outer)
-        actions.pack(fill="x", pady=(12, 0))
-        for label, callback in [("Enviar · Ctrl+Enter", self.send), ("🎙 Falar", self.listen),
-                                ("Executar plano", self.execute), ("Salvar rotina", self.save_routine),
-                                ("Ouvir resposta", self.speak)]:
-            self.button(actions, label, callback).pack(side="left", padx=(0, 6))
-        ttk.Button(actions, text="Parar", command=self.stop).pack(side="right")
+        actions.grid(row=7, column=0, sticky="ew", pady=(10, 0))
+        for column in range(3):
+            actions.columnconfigure(column, weight=1, uniform="actions")
+        for index, (label, callback) in enumerate([
+                ("Enviar · Ctrl+Enter", self.send), ("Falar", self.listen),
+                ("Executar plano", self.execute), ("Salvar rotina", self.save_routine),
+                ("Ouvir resposta", self.speak)]):
+            self.button(actions, label, callback).grid(
+                row=index // 3, column=index % 3, sticky="ew", padx=3, pady=3)
+        self.stop_button = ttk.Button(actions, text="Parar", command=self.stop)
+        self.stop_button.grid(row=1, column=2, sticky="ew", padx=3, pady=3)
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.after(80, self.poll)
 
