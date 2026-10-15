@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.py[cod]
+models/
+.env
+data/
+*.sqlite3
+*.sqlite3-*

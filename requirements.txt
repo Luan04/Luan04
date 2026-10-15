@@ -1,0 +1,5 @@
+vosk>=0.3.45,<0.4
+sounddevice>=0.5,<0.6
+PyAutoGUI>=0.9.54,<0.10
+pypdf>=5,<7
+pyttsx3>=2.98,<3
