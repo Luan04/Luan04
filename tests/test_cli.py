@@ -47,7 +47,9 @@ class CliTests(unittest.TestCase):
         model.return_value = {"message": "ok", "actions": [{"type": "open_app", "value": "calculadora"}]}
         with patch("builtins.input", return_value="executar"), patch("assistente_pc.executor.execute_plan") as execute:
             self.command("--text", "abra a calculadora", "--history")
-            execute.assert_called_once_with(model.return_value)
+            execute.assert_called_once()
+            self.assertEqual(execute.call_args.args[0]["actions"], model.return_value["actions"])
+            self.assertIn("Ainda não executei", execute.call_args.args[0]["message"])
         self.assertEqual(Store(self.directory).history()[0]["status"], "completed")
 
     def test_dry_run_rejects_memory_mutation(self):

@@ -169,10 +169,10 @@ class LocalDataTests(unittest.TestCase):
         self.store.remember("profissão", "Designer")
         make.return_value = plan()
         session = Session(self.store)
-        for i in range(8):
+        for i in range(18):
             session.prepare(f"pedido {i}")
         self.assertEqual(make.call_args.args[2], {"profissão": "Designer"})
-        self.assertEqual(len(session.turns), 6)
+        self.assertEqual(len(session.turns), 24)
         self.assertIn("apenas propostas", session.turns[-1]["content"])
         self.assertFalse(self.store.history())
         session.reset()
@@ -182,7 +182,8 @@ class LocalDataTests(unittest.TestCase):
     def test_named_routine_does_not_use_model(self, make):
         self.store.save_routine("trabalho", plan())
         result = Session(self.store).prepare("executar rotina trabalho")
-        self.assertEqual(result, plan())
+        self.assertEqual(result["actions"], plan()["actions"])
+        self.assertIn("Ainda não executei", result["message"])
         make.assert_not_called()
 
     @patch("assistente_pc.session.request_json")

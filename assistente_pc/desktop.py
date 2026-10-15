@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
+from .conversation import review_plan
 from .executor import ExecutionCancelled, execute_plan
 from .session import Session
 from .storage import Store
@@ -22,6 +23,7 @@ class Desktop:
         self.last_message = ""
         self.mic = None
         self.controls = []
+        self.live_active = False
         root.title("Assistente PC · Local e sob seu controle")
         width = min(1100, max(850, root.winfo_screenwidth() - 80))
         height = min(790, max(650, root.winfo_screenheight() - 120))
@@ -37,6 +39,7 @@ class Desktop:
         style.configure("TButton", font=("Segoe UI", 10), padding=(12, 9))
         style.configure("TCheckbutton", background="#101827", foreground="#e3edf7")
         style.configure("TCombobox", padding=6)
+        style.configure("Voice.TButton", background="#85dfc5", foreground="#102a25")
         outer = ttk.Frame(root, padding=16)
         outer.pack(fill="both", expand=True)
         # Only the transcript grows/shrinks. Reserve space for the composer first;
@@ -49,11 +52,19 @@ class Desktop:
         toolbar.grid(row=2, column=0, sticky="ew")
         self.model = tk.StringVar(value=args.model)
         ttk.Label(toolbar, text="Modelo Ollama").grid(row=0, column=0, sticky="w")
-        ttk.Entry(toolbar, textvariable=self.model, width=22).grid(row=0, column=1, padx=8, sticky="w")
+        model_entry = ttk.Entry(toolbar, textvariable=self.model, width=22)
+        model_entry.grid(row=0, column=1, padx=8, sticky="w")
         self.mode = tk.StringVar(value="assistente")
-        ttk.Combobox(toolbar, textvariable=self.mode, values=("assistente", "conversa", "documentos"), state="readonly", width=14).grid(row=0, column=2, padx=5, sticky="w")
+        mode_entry = ttk.Combobox(toolbar, textvariable=self.mode, values=("assistente", "conversa", "documentos"), state="readonly", width=14)
+        mode_entry.grid(row=0, column=2, padx=5, sticky="w")
+        self.options = [(model_entry, "normal"), (mode_entry, "readonly")]
         self.record_history = tk.BooleanVar(value=args.history)
-        ttk.Checkbutton(toolbar, text="Salvar histórico de ações", variable=self.record_history).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        history_check = ttk.Checkbutton(toolbar, text="Salvar histórico de ações", variable=self.record_history)
+        history_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.allow_simple = tk.BooleanVar(value=False)
+        simple_check = ttk.Checkbutton(toolbar, text="Voz: apps e volume sem confirmar", variable=self.allow_simple)
+        simple_check.grid(row=1, column=2, sticky="w", pady=(6, 0))
+        self.options.extend([(history_check, "normal"), (simple_check, "normal")])
         tools = ttk.Frame(outer)
         tools.grid(row=3, column=0, sticky="ew", pady=10)
         for label, callback in [("Memórias", self.memories), ("Rotinas", self.routines),
@@ -66,7 +77,8 @@ class Desktop:
         self.write("ASSISTENTE", "Olá! Posso conversar, preparar ações e consultar documentos que você importar.\n"
                    "Ensine preferências em Memórias e salve planos em Rotinas. Nada é monitorado em segundo plano.\n"
                    "Exemplos: ‘abra a calculadora’ ou ‘executar rotina começar trabalho’.\n"
-                   "Ações só acontecem após clicar em Executar plano e confirmar.")
+                   "Clique em Conversar por voz para falar e ouvir sem clicar a cada frase. "
+                   "Ações exigem autorização; a opção de apps e volume diretos é voluntária.")
         self.status = tk.StringVar(value="Pronto · microfone desligado")
         status_label = ttk.Label(outer, textvariable=self.status, style="Hint.TLabel", wraplength=750)
         status_label.grid(row=5, column=0, sticky="ew", pady=(8, 6))
@@ -77,16 +89,18 @@ class Desktop:
         self.entry.bind("<Control-Return>", lambda event: self.send())
         actions = ttk.Frame(outer)
         actions.grid(row=7, column=0, sticky="ew", pady=(10, 0))
-        for column in range(3):
+        for column in range(4):
             actions.columnconfigure(column, weight=1, uniform="actions")
         for index, (label, callback) in enumerate([
-                ("Enviar · Ctrl+Enter", self.send), ("Falar", self.listen),
-                ("Executar plano", self.execute), ("Salvar rotina", self.save_routine),
+                ("Enviar · Ctrl+Enter", self.send), ("Conversar por voz", self.start_live),
+                ("Falar uma vez", self.listen), ("Executar plano", self.execute), ("Salvar rotina", self.save_routine),
                 ("Ouvir resposta", self.speak)]):
-            self.button(actions, label, callback).grid(
-                row=index // 3, column=index % 3, sticky="ew", padx=3, pady=3)
+            button = self.button(actions, label, callback)
+            if label == "Conversar por voz":
+                button.configure(style="Voice.TButton")
+            button.grid(row=index // 4, column=index % 4, sticky="ew", padx=3, pady=3)
         self.stop_button = ttk.Button(actions, text="Parar", command=self.stop)
-        self.stop_button.grid(row=1, column=2, sticky="ew", padx=3, pady=3)
+        self.stop_button.grid(row=1, column=3, sticky="ew", padx=3, pady=3)
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.after(80, self.poll)
 
@@ -115,6 +129,9 @@ class Desktop:
         self.status.set(label)
         for control in self.controls:
             control.configure(state="disabled")
+        for control, _ in self.options:
+            control.configure(state="disabled")
+        self.entry.configure(state="disabled")
 
         def worker():
             try:
@@ -131,15 +148,29 @@ class Desktop:
                 kind, value = self.events.get_nowait()
                 if kind == "done":
                     self.busy = False
+                    self.live_active = False
+                    self.entry.configure(state="normal")
+                    for control, state in self.options:
+                        control.configure(state=state)
                     for control in self.controls:
                         control.configure(state="normal")
                     self.status.set("Pronto · microfone desligado")
                 elif kind == "error":
                     self.write("AVISO", value + "\nAções já realizadas não são desfeitas.")
+                elif kind == "status":
+                    if not self.cancel.is_set():
+                        self.status.set(value)
+                elif kind == "heard":
+                    self.write("VOCÊ · VOZ", value)
+                elif kind == "reply":
+                    if not self.cancel.is_set():
+                        self.last_message = value
+                        self.write("ASSISTENTE", value)
                 elif kind == "message":
                     self.write("ASSISTENTE", value)
                 elif kind == "transcript":
                     if not self.cancel.is_set():
+                        self.entry.configure(state="normal")
                         self.entry.delete("1.0", "end")
                         self.entry.insert("1.0", value)
                         self.write("MICROFONE", "Confira a transcrição no campo abaixo e clique em Enviar.")
@@ -147,6 +178,9 @@ class Desktop:
                     if not self.cancel.is_set():
                         self.pending = value
                         request, plan = value
+                        if plan["actions"]:
+                            plan = review_plan(plan)
+                        self.pending = (request, plan)
                         self.last_message = plan["message"]
                         lines = [f"{i}. {a['type']} → {a['value']}" for i, a in enumerate(plan["actions"], 1)]
                         self.write("ASSISTENTE", plan["message"] + ("\n\nPLANO PENDENTE\n" + "\n".join(lines) if lines else ""))
@@ -183,6 +217,36 @@ class Desktop:
             self.events.put(("transcript", text))
         self.run("Microfone ativo · fale e faça uma pausa (até 15s)", work)
 
+    def start_live(self):
+        if self.busy:
+            return
+        permission = ("O microfone será reaberto após cada resposta até você parar. "
+                      "Nada é gravado em arquivo. Use fones e um ambiente sem outras vozes.\n\n"
+                      "Enquanto penso, falo ou executo, não estou ouvindo. Para interromper a qualquer momento, "
+                      "use o botão Parar. Durante a escuta, diga ‘parar assistente’.\n\n")
+        if self.allow_simple.get():
+            permission += ("Você marcou execução direta: abrir programas e alterar volume não terão "
+                           "uma segunda confirmação nesta sessão de voz. Reconhecimento incorreto pode "
+                           "acionar essas tarefas. Outros pedidos continuam sujeitos a revisão.\n\n")
+        permission += "Ativar conversa por voz?"
+        if not messagebox.askyesno("Ativar microfone em turnos", permission, parent=self.root):
+            return
+        self.pending = None
+        self.session.model = self.model.get().strip()
+        allow_simple, history, mode = self.allow_simple.get(), self.record_history.get(), self.mode.get()
+        self.live_active = True
+
+        def work():
+            from .audio import Microphone
+            from .live import LiveConversation
+            from .speech import speak
+            if self.mic is None:
+                self.mic = Microphone(self.args.voice_model, self.args.device)
+            LiveConversation(self.session, self.mic, speak, self.cancel,
+                             lambda kind, value: self.events.put((kind, value)),
+                             allow_simple=allow_simple, history=history, mode=mode).run()
+        self.run("Preparando conversa por voz…", work)
+
     def confirm_focus(self, text):
         event, answer = threading.Event(), []
         self.events.put(("confirm", (text, event, answer)))
@@ -212,6 +276,7 @@ class Desktop:
                 status = "cancelled"
                 raise
             finally:
+                self.session.record_result(plan, status)
                 if record:
                     self.store.log(request, plan, status)
         self.run("Executando · Parar interrompe nos pontos de verificação", work)
@@ -361,7 +426,7 @@ class Desktop:
             return
         from .speech import speak
         text = self.last_message
-        self.run("Lendo resposta com voz local · Parar não interrompe esta leitura", lambda: speak(text))
+        self.run("Lendo resposta com voz local · Parar interrompe", lambda: speak(text, cancel=self.cancel))
 
     def stop(self):
         self.cancel.set()

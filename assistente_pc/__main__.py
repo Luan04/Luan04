@@ -152,7 +152,8 @@ def main():
         plan = None
         status = "proposed"
         try:
-            plan = store.routine(args.routine) if args.routine else session.prepare(text, args.mode)
+            from .conversation import review_plan
+            plan = review_plan(store.routine(args.routine)) if args.routine else session.prepare(text, args.mode)
             print(plan["message"])
             for index, action in enumerate(plan["actions"], 1):
                 print(f"  {index}. {LABELS[action['type']]}: {action['value']}")
@@ -191,6 +192,8 @@ def main():
             if args.text or args.routine:
                 raise SystemExit(1) from exc
         finally:
+            if plan and plan["actions"] and status in ("completed", "failed", "cancelled"):
+                session.record_result(plan, status)
             if args.history and plan and plan["actions"] and not args.dry_run:
                 store.log(text, plan, status)
         if args.text or args.routine:
